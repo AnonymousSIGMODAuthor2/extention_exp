@@ -5,7 +5,7 @@ import math
 #NUM_CELLS = [64, 100, 256, 529, 1024]  # Different grid sizes for experiments
 
 #default G = 256
-NUM_CELLS = [250]
+NUM_CELLS = [25]
 
 
 COMBO = [
@@ -23,7 +23,7 @@ GAMMAS = [1]  # example values for g
 
 
 DATASET_NAMES = [
-    # ex.: "dbpedia_1994_FIFA_World_Cup_squads",
+    "1994_FIFA_World_Cup_squads",
 ]
 
 
