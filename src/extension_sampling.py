@@ -16,7 +16,7 @@ from HPF_eq import HPFR
 from baseline_iadu import base_precompute
 
 
-def grid_proportional_sampling(S: List[Place], k: int, W: float, G: int):
+def grid_sampling(S: List[Place], k: int, W: float, G: int):
     """
     Implements "Option 3: Grid based and proportional selection per cell" [cite: 32-34].
     

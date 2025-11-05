@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from HPF_eq import HPFR, HPFR_div
-from models import Place
+from models import Place, SquareGrid
 import config as cfg
 
 
@@ -137,85 +137,36 @@ from typing import List
 import os, pickle, re
 from models import Place
 
-def load_dataset(shape: str, K: int, datasets_dir: str = None) -> List[Place]:
+def load_dataset(dataset_name: str, K: int) -> List[Place]:
     """
-    Load a dataset list[Place] for a given Wikipedia/YAGO title `shape` and cardinality K.
-    Auto-detects YAGO vs DBpedia by filename prefix.
-
-    Expected filenames inside datasets_dir:
-        - dbpedia_<TITLE>_K{K}.pkl
-        - yago_<TITLE>_K{K}.pkl
-
-    The function is tolerant to minor punctuation/Unicode differences in <TITLE>.
+    Loads a pickled dataset based on its name and K value.
+    This new version is flexible and works for "shapes" (bubble, flower)
+    and "real" (dbpedia, yago) datasets, as they all
+    follow the same "{dataset_name}_K{K}.pkl" format.
     """
-    # --- Locate datasets directory (../datasets preferred; fall back to ./datasets)
-    here = os.path.abspath(os.path.dirname(__file__))
-    candidates_dirs = []
-    if datasets_dir is not None:
-        candidates_dirs.append(os.path.abspath(datasets_dir))
-    candidates_dirs.append(os.path.abspath(os.path.join(here, "..", "datasets")))
-    candidates_dirs.append(os.path.abspath(os.path.join(here, "datasets")))
-    base_dir = next((d for d in candidates_dirs if os.path.isdir(d)), candidates_dirs[0])
+    # Construct the path relative to this file (src/baseline_iadu.py)
+    # Go up one level (to src/) and then into "datasets"
+    base_path = os.path.join(os.path.dirname(__file__), "..", "datasets")
+    file_path = os.path.join(base_path, f"{dataset_name}_K{K}.pkl")
 
-    # --- Candidate exact paths (fast path)
-    exact_candidates = [
-        os.path.join(base_dir, f"yago_{shape}_K{K}.pkl"),
-        os.path.join(base_dir, f"dbpedia_{shape}_K{K}.pkl"),
-    ]
-    for path in exact_candidates:
-        if os.path.exists(path):
-            with open(path, "rb") as f:
-                return pickle.load(f)
-
-    # --- Fallback: tolerant scan (handles ’ vs ', en dash vs hyphen, etc.)
-    def norm(s: str) -> str:
-        # unify dashes/apostrophes, keep alnum/underscore, collapse repeats
-        s = s.replace("–", "-").replace("—", "-").replace("’", "'")
-        s = s.replace("´", "'").replace("`", "'")
-        # keep letters/numbers/underscore only
-        s = re.sub(r"[^0-9A-Za-z_'-]+", "_", s)
-        # treat apostrophes like underscore for filename matching
-        s = s.replace("'", "_").replace("-", "_")
-        s = re.sub(r"_+", "_", s).strip("_").lower()
-        return s
-
-    target = norm(shape)
-    best_path = None
-    for fname in os.listdir(base_dir):
-        if not fname.endswith(f"_K{K}.pkl"):
-            continue
-        if not (fname.startswith("dbpedia_") or fname.startswith("yago_")):
-            continue
-        # strip prefix & suffix to compare the title part
-        title_part = fname.split("_K")[0]
-        title_part = title_part.split("dbpedia_", 1)[-1] if title_part.startswith("dbpedia_") else title_part.split("yago_", 1)[-1]
-        if norm(title_part) == target:
-            best_path = os.path.join(base_dir, fname)
-            break
-
-    if best_path is None:
-        # last-resort: loosen to "starts with" (helps when your stored title had extra tail)
-        for fname in os.listdir(base_dir):
-            if not fname.endswith(f"_K{K}.pkl"):
-                continue
-            if not (fname.startswith("dbpedia_") or fname.startswith("yago_")):
-                continue
-            title_part = fname.split("_K")[0]
-            title_part = title_part.split("dbpedia_", 1)[-1] if title_part.startswith("dbpedia_") else title_part.split("yago_", 1)[-1]
-            if norm(title_part).startswith(target):
-                best_path = os.path.join(base_dir, fname)
-                break
-
-    if best_path and os.path.exists(best_path):
-        with open(best_path, "rb") as f:
-            return pickle.load(f)
-
-    # If we reach here, nothing matched
-    searched = "\n  - " + "\n  - ".join(exact_candidates)
-    raise FileNotFoundError(
-        f"[load_dataset] Could not find dataset for shape='{shape}', K={K} in '{base_dir}'. "
-        f"Tried:{searched}\nAlso scanned folder with tolerant matching."
-    )
+    if not os.path.exists(file_path):
+        print(f"Warning: Dataset file not found at {file_path}")
+        print(f"       (Trying to load: dataset_name='{dataset_name}', K={K})")
+        return []
+    
+    try:
+        with open(file_path, "rb") as f:
+            S = pickle.load(f)
+        
+        # Verify the loaded data is a list of Place objects
+        if isinstance(S, list) and (len(S) == 0 or isinstance(S[0], Place)):
+            return S
+        else:
+            print(f"Error: File {file_path} loaded, but did not contain a list of Place objects.")
+            return []
+    except Exception as e:
+        print(f"Error loading pickle file {file_path}: {e}")
+        return []
 
 def maxDistance(S: List[Place]) -> float:
     maxD = 0
@@ -226,37 +177,58 @@ def maxDistance(S: List[Place]) -> float:
             maxD = max(maxD, d)
     return maxD
 
-# --- Plot utility ---
-def plot_selected(S: List[Place], R: List[Place], title: str, ax):
-    coords = np.array([p.coords for p in S])
-    ax.scatter(coords[:, 0], coords[:, 1], c="lightblue", s=10, label="All Places")
+def plot_selected(S: List[Place], R: List[Place], title: str, ax, grid: SquareGrid = None):
+    
+    # Get IDs of selected points for efficient lookup
+    R_ids = {p.id for p in R}
 
-    # Extract coords by affinity value
-    selected_1 = [p.coords for p in R if p.rF == 0.0]
-    selected_08 = [p.coords for p in R if p.rF == 0.8]
-    selected_06 = [p.coords for p in R if p.rF == 0.6]
-    selected_04 = [p.coords for p in R if p.rF == 0.4]
+    # Separate coordinates
+    S_minus_R_coords = []
+    R_coords = []
 
-    if selected_1:
-        selected_1 = np.array(selected_1)
-        ax.scatter(selected_1[:, 0], selected_1[:, 1], c="red", s=25, label="rF=0.0")
-    if selected_08:
-        selected_08 = np.array(selected_08)
-        ax.scatter(selected_08[:, 0], selected_08[:, 1], c="black", s=25, label="rF=0.8")
-    if selected_06:
-        selected_06 = np.array(selected_06)
-        ax.scatter(selected_06[:, 0], selected_06[:, 1], c="purple", s=25, label="rF=0.6")
-    if selected_04:
-        selected_04 = np.array(selected_04)
-        ax.scatter(selected_04[:, 0], selected_04[:, 1], c="blue", s=25, label="rF=0.4")
+    for p in S:
+        if p.id in R_ids:
+            R_coords.append(p.coords)
+        else:
+            S_minus_R_coords.append(p.coords)
 
+    # Plot S - R (non-selected points)
+    if S_minus_R_coords:
+        coords_S_minus_R = np.array(S_minus_R_coords)
+        ax.scatter(coords_S_minus_R[:, 0], coords_S_minus_R[:, 1], c="lightblue", s=10, label="S - R")
+    
+    # Plot R (selected points)
+    if R_coords:
+        coords_R = np.array(R_coords)
+        # Plot all selected points as RED
+        ax.scatter(coords_R[:, 0], coords_R[:, 1], c="red", s=25, label="R")
+        
     ax.set_title(title)
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
     ax.legend()
-    ax.grid(True)
-    ax.axis("equal")
+    
+    # --- NEW: Grid plotting logic ---
+    if grid:
+        # Get grid properties
+        x_min, x_max = grid.x_min, grid.x_max
+        y_min, y_max = grid.y_min, grid.y_max
+        cell_w, cell_h = grid.cell_w, grid.cell_h
+        Ax, Ay = grid.dims() # Use the dims() method from SquareGrid
 
+        # Set plot limits to match the grid boundaries
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(y_min, y_max)
+
+        # Draw vertical lines
+        v_lines = [x_min + (i * cell_w) for i in range(1, Ax)]
+        if v_lines:
+            ax.vlines(v_lines, ymin=y_min, ymax=y_max, color='gray', linestyle='--', linewidth=0.5)
+        
+        # Draw horizontal lines
+        h_lines = [y_min + (i * cell_h) for i in range(1, Ay)]
+        if h_lines:
+            ax.hlines(h_lines, xmin=x_min, xmax=x_max, color='gray', linestyle='--', linewidth=0.5)
+    # --- End of new logic ---
+    
 baseline_scores = []
 baseline_prep_times = []
 iadu_scores = []

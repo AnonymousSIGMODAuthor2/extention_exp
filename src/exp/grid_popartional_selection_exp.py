@@ -5,19 +5,24 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from collections import defaultdict
 from typing import List, Dict, Tuple
 import pandas as pd
-from models import Place
+# --- MODIFIED IMPORT ---
+from models import Place, SquareGrid # Now import SquareGrid
 from config import COMBO, NUM_CELLS, GAMMAS, DATASET_NAMES
 
-# --- Only import what we need ---
-from baseline_iadu import load_dataset
+# --- MODIFIED IMPORT ---
+from baseline_iadu import load_dataset, plot_selected
 from grid_iadu import grid_iadu
-from extension_sampling import grid_proportional_sampling
-# --- NEW IMPORT ---
+from extension_sampling import grid_sampling 
 from biased_sampling import biased_sampling
 # ---
 
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+
+# --- NEW IMPORTS for PLOTTING ---
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
+# ---
 
 # Updated experiment name for the focused run
 EXPERIMENT_NAME = "grid_VS_extension_VS_biased"
@@ -27,17 +32,23 @@ def run_experiment():
     """
     Runs a simplified experiment comparing:
     1. Grid IAdU (Main Paper)
-    2. Grid Proportional Sampling (Extension Paper, Option 3)
+    2. Grid Sampling (Extension Paper, Option 3)
     3. Biased Sampling (From hardcore_exp.py)
     
-    Logs H(R), psS, psR, and lenCL.
+    Logs H(R), psS, psR, and lenCL to Excel.
+    Generates a new 'experiment_plots.pdf' with visual results *including grid lines*.
     """
     log = defaultdict(list)
+
+    # --- NEW: Initialize PDF file ---
+    pdf_path = f"{EXPERIMENT_NAME}_plots.pdf"
+    pdf_pages = PdfPages(pdf_path)
+    # ---
 
     for (K, k) in COMBO:
         for g in GAMMAS:
             W = K / (g * k)
-            print(f"Comparing GridIAdU vs. GridProp vs. Biased | K={K}, k={k}, Gs={NUM_CELLS}")
+            print(f"Comparing Grid_IAdU vs. Grid_Sampling vs. Biased_Sampling | K={K}, k={k}, Gs={NUM_CELLS}")
 
             for shape in SHAPES:
                 for G in NUM_CELLS:
@@ -49,16 +60,22 @@ def run_experiment():
                         print(f"    Skipping shape {shape} for K={K}, no data loaded.")
                         continue
 
+                    # --- NEW: Create the grid object ---
+                    # This is the same grid that grid_iadu and grid_sampling will use
+                    try:
+                        grid = SquareGrid(S, G)
+                    except ValueError:
+                        print(f"    Skipping shape {shape}, K={K}. Invalid data for grid.")
+                        continue
+                    # ---
+
                     # --- 1. Run Grid IAdU (Main Paper) ---
-                    # Unpacks 7 values
                     R_grid, score_grid, grid_pss_sum, grid_psr_sum, _, _, lenCL = grid_iadu(S, k, W, G)
 
-                    # --- 2. Run Grid Proportional Sampling (Extension) ---
-                    # Unpacks 7 values
-                    R_grid_prop, score_grid_prop, grid_prop_pss_sum, grid_prop_psr_sum, _, _, _ = grid_proportional_sampling(S, k, W, G)
+                    # --- 2. Run Grid Sampling (Extension) ---
+                    R_grid_samp, score_grid_samp, grid_samp_pss_sum, grid_samp_psr_sum, _, _, _ = grid_sampling(S, k, W, G)
 
-                    # --- 3. Run Biased Sampling (NEW) ---
-                    # Unpacks 5 values
+                    # --- 3. Run Biased Sampling (FIXED UNPACK) ---
                     R_biased, score_biased, biased_pss_sum, biased_psr_sum, _ = biased_sampling(S, k, W)
 
                     # --- 4. Log all comparison data ---
@@ -76,17 +93,40 @@ def run_experiment():
                         "grid_iadu_pss_sum": grid_pss_sum,
                         "grid_iadu_psr_sum": grid_psr_sum,
                         
-                        # Grid Proportional Sampling Results
-                        "grid_prop_hpfr": score_grid_prop,
-                        "grid_prop_pss_sum": grid_prop_pss_sum,
-                        "grid_prop_psr_sum": grid_prop_psr_sum,
+                        # Grid Sampling Results
+                        "grid_sampling_hpfr": score_grid_samp,
+                        "grid_sampling_pss_sum": grid_samp_pss_sum,
+                        "grid_sampling_psr_sum": grid_samp_psr_sum,
 
-                        # Biased Sampling Results (NEW)
+                        # Biased Sampling Results
                         "biased_hpfr": score_biased,
                         "biased_pss_sum": biased_pss_sum,
                         "biased_psr_sum": biased_psr_sum,
                     }
                     log[(K, k, g, G)].append(log_entry)
+
+                    # --- UPDATED: Plotting logic ---
+                    fig, axes = plt.subplots(1, 3, figsize=(21, 7))
+                    
+                    fig.suptitle(f"Shape: {shape}  |  K={K}, k={k}  |  G={G} (Ax={grid.Ax}, Ay={grid.Ay})  |  lenCL={lenCL}", fontsize=16)
+                    
+                    # Plot 1: Grid IAdU (now passing grid=grid)
+                    plot_selected(S, R_grid, f"Grid IAdU\nHPFR: {score_grid: .4f}", axes[0], grid=grid)
+                    
+                    # Plot 2: Grid Sampling (now passing grid=grid)
+                    plot_selected(S, R_grid_samp, f"Grid Sampling (Extension)\nHPFR: {score_grid_samp: .4f}", axes[1], grid=grid)
+                    
+                    # Plot 3: Biased Sampling (now passing grid=grid)
+                    plot_selected(S, R_biased, f"Biased Sampling\nHPFR: {score_biased: .4f}", axes[2], grid=grid)
+                    
+                    pdf_pages.savefig(fig)
+                    plt.close(fig) 
+                    # --- End of updated plotting logic ---
+
+    # --- NEW: Close the PDF file after the loop ---
+    pdf_pages.close()
+    print(f"\nSuccessfully saved plots to {pdf_path}")
+    # ---
 
     avg_log = compute_average_log(log)
     save_outputs(avg_log)
@@ -97,7 +137,6 @@ def save_outputs(log: Dict):
     Saves a simplified Excel file with the direct comparison.
     """
     def smart_round(value):
-        # Handle potential None values before rounding
         if value is None:
             return None
         if value == 0:
@@ -112,9 +151,8 @@ def save_outputs(log: Dict):
         for k, v in list(row.items()):
             if isinstance(v, float):
                 row[k] = smart_round(v)
-            # Round lenCL as well, since it will be an average
             if k == "lenCL" and isinstance(v, float):
-                 row[k] = round(v, 1) # Average CL can have decimals
+                 row[k] = round(v, 1)
         all_rows.append(row)
 
     df = pd.DataFrame(all_rows)
@@ -126,18 +164,16 @@ def save_outputs(log: Dict):
     if sort_cols:
         df.sort_values(by=sort_cols, ascending=[True] * len(sort_cols), inplace=True)
 
-    # --- Define simplified columns ---
     setup_cols = ["K", "k", "W", "K/(k*g)", "G", "lenCL"]
     
-    # --- UPDATED score_cols ---
     score_cols = [
         "grid_iadu_hpfr",
         "grid_iadu_pss_sum",
         "grid_iadu_psr_sum",
         
-        "grid_prop_hpfr",
-        "grid_prop_pss_sum",
-        "grid_prop_psr_sum",
+        "grid_sampling_hpfr",
+        "grid_sampling_pss_sum",
+        "grid_sampling_psr_sum",
         
         "biased_hpfr",
         "biased_pss_sum",
@@ -145,7 +181,6 @@ def save_outputs(log: Dict):
     ]
     
     all_cols = setup_cols + score_cols
-    # ---
 
     for col in all_cols:
         if col not in df.columns:
@@ -155,7 +190,7 @@ def save_outputs(log: Dict):
     xlsx_name = f"{EXPERIMENT_NAME}.xlsx"
     df.to_excel(xlsx_name, index=False)
 
-    # === Simplified Styling ===
+    # === Styling ===
     wb = load_workbook(xlsx_name)
     ws = wb.active
     header_fill = PatternFill(start_color="A6A6A6", end_color="A6A6A6", fill_type="solid")
@@ -228,16 +263,14 @@ def compute_average_log(
         
         all_fields = set().union(*[r.keys() for r in rows])
         for fname in all_fields:
-            # --- *** Update exclusion list *** ---
             if fname in {"shape", "K", "k", "g", "G", "W", "K/(k*g)"}:
                 continue
             
-            # Average all other numeric fields (this will include lenCL)
-            vals = [r[fname] for r in rows if isinstance(r[fname], (int, float))]
+            vals = [r[fname] for r in rows if isinstance(r.get(fname), (int, float))]
             if vals:
                 out[fname] = sum(vals) / len(vals)
             elif fname not in out:
-                out[fname] = None # Ensure field exists
+                out[fname] = None 
 
         avg_log[key] = out
 
