@@ -177,12 +177,10 @@ def maxDistance(S: List[Place]) -> float:
             maxD = max(maxD, d)
     return maxD
 
-def plot_selected(S: List[Place], R: List[Place], title: str, ax, grid: SquareGrid = None):
+def plot_selected(S: List[Place], R: List[Place], title: str, ax, grid: SquareGrid = None, cell_stats: Dict = None):
     
-    # Get IDs of selected points for efficient lookup
     R_ids = {p.id for p in R}
 
-    # Separate coordinates
     S_minus_R_coords = []
     R_coords = []
 
@@ -192,43 +190,54 @@ def plot_selected(S: List[Place], R: List[Place], title: str, ax, grid: SquareGr
         else:
             S_minus_R_coords.append(p.coords)
 
-    # Plot S - R (non-selected points)
     if S_minus_R_coords:
         coords_S_minus_R = np.array(S_minus_R_coords)
         ax.scatter(coords_S_minus_R[:, 0], coords_S_minus_R[:, 1], c="lightblue", s=10, label="S - R")
     
-    # Plot R (selected points)
     if R_coords:
         coords_R = np.array(R_coords)
-        # Plot all selected points as RED
         ax.scatter(coords_R[:, 0], coords_R[:, 1], c="red", s=25, label="R")
         
     ax.set_title(title)
     ax.legend()
     
-    # --- NEW: Grid plotting logic ---
     if grid:
-        # Get grid properties
         x_min, x_max = grid.x_min, grid.x_max
         y_min, y_max = grid.y_min, grid.y_max
         cell_w, cell_h = grid.cell_w, grid.cell_h
-        Ax, Ay = grid.dims() # Use the dims() method from SquareGrid
+        Ax, Ay = grid.dims()
 
-        # Set plot limits to match the grid boundaries
         ax.set_xlim(x_min, x_max)
         ax.set_ylim(y_min, y_max)
 
-        # Draw vertical lines
         v_lines = [x_min + (i * cell_w) for i in range(1, Ax)]
         if v_lines:
             ax.vlines(v_lines, ymin=y_min, ymax=y_max, color='gray', linestyle='--', linewidth=0.5)
         
-        # Draw horizontal lines
         h_lines = [y_min + (i * cell_h) for i in range(1, Ay)]
         if h_lines:
             ax.hlines(h_lines, xmin=x_min, xmax=x_max, color='gray', linestyle='--', linewidth=0.5)
-    # --- End of new logic ---
-    
+            
+        # --- NEW: Text annotation logic ---
+        # Only runs if 'cell_stats' is provided
+        if cell_stats:
+            for cell_id, (total_count, selected_count) in cell_stats.items():
+                if total_count > 0: # Only label cells that have points
+                    gx, gy = cell_id
+                    # Calculate center of the cell
+                    cx = x_min + (gx + 0.5) * cell_w
+                    cy = y_min + (gy + 0.5) * cell_h
+                    
+                    # Create the text
+                    text = f"{selected_count}/{total_count}"
+                    
+                    # Add text to the plot
+                    ax.text(cx, cy, text, 
+                            ha='center', va='center', 
+                            fontsize=8, color='black',
+                            bbox=dict(facecolor='white', alpha=0.5, pad=0.1, boxstyle='round,pad=0.2'))
+        # --- End of new logic ---
+        
 baseline_scores = []
 baseline_prep_times = []
 iadu_scores = []

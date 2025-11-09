@@ -18,48 +18,46 @@ from baseline_iadu import base_precompute
 
 def grid_sampling(S: List[Place], k: int, W: float, G: int):
     """
-    Implements "Option 3: Grid based and proportional selection per cell" [cite: 32-34].
+    Implements "Option 3: Grid based and proportional selection per cell".
     
     This method allocates k samples proportionally to grid cells based on their
     density, then performs simple random sampling within each cell.
+    
+    NOW ALSO RETURNS:
+    - cell_stats: Dict[tuple, Tuple[int, int]] mapping cell_id -> (total, selected)
     """
     
     # --- Preparation step (as in your file) ---
     t_prep_start = time.time()
     try:
-        # 1. "allocate each object in a cell" 
         grid = SquareGrid(S, G)
     except ValueError:
         print("Warning: S is empty or invalid, returning empty results.")
-        return [], 0.0, 0.0, 0.0, 0.0, 0.0, 0
+        # --- MODIFIED RETURN (8 values) ---
+        return [], 0.0, 0.0, 0.0, 0.0, 0.0, 0, {}
         
-    # 2. Get the "virtual grid" (list of non-empty cells)
-    CL = grid.get_full_cells() 
+    CL = grid.get_full_cells() # Get non-empty cells
     
-    # 3. Calculate scores using VGA (as you said)
-    #    Your template times this as prep_time.
     psS, sS , _ = virtual_grid_based_algorithm(CL,S)
     prep_time = time.time() - t_prep_start
     
-    # 4. Get optimal scores for final H(R) calculation (as in your file)
     optimal_psS, optimal_sS, optimal_prep_time = base_precompute(S)
     
     K = len(S)
     if K == 0 or k == 0:
-        return [], 0.0, 0.0, 0.0, prep_time, 0.0, 0
+        # --- MODIFIED RETURN (8 values) ---
+        return [], 0.0, 0.0, 0.0, prep_time, 0.0, 0, {}
     # ---
 
     # --- Selection step ---
-    # This is: "Then we pick from each cell proportionally objects" 
-    # This uses the 'CL' (virtual grid) from the prep step.
     t_selection_start = time.time()
     
     R: List[Place] = []
+    # k_alloc maps cell_id -> num_to_pick
     k_alloc: Dict[Tuple[int, int], int] = {} 
     remainders = [] 
     total_k_allocated = 0
     
-    # 1. Calculate ideal picks, integer parts, and remainders
     for c in CL:
         if c.size() == 0:
             continue
@@ -71,7 +69,6 @@ def grid_sampling(S: List[Place], k: int, W: float, G: int):
         total_k_allocated += integer_part
         remainders.append((c.id, ideal - integer_part))
 
-    # 2. Distribute remaining k's based on largest remainders
     k_remaining = k - total_k_allocated
     
     remainders.sort(key=lambda x: x[1], reverse=True)
@@ -80,7 +77,6 @@ def grid_sampling(S: List[Place], k: int, W: float, G: int):
         c_id_to_add = remainders[i][0]
         k_alloc[c_id_to_add] += 1
         
-    # 3. Build R by sampling from each cell
     cell_map = {c.id: c for c in CL} 
 
     for cell_id, num_to_pick in k_alloc.items():
@@ -95,12 +91,22 @@ def grid_sampling(S: List[Place], k: int, W: float, G: int):
     # --- End of Selection Step ---
     
     
+    # --- NEW: Build cell_stats dictionary ---
+    # maps cell_id -> (total_count, selected_count)
+    cell_stats: Dict[Tuple[int, int], Tuple[int, int]] = {}
+    for c in grid.get_full_cells(): # Use all non-empty cells
+        cell_id = c.id
+        total_count = c.size()
+        selected_count = k_alloc.get(cell_id, 0) # Get from k_alloc
+        cell_stats[cell_id] = (total_count, selected_count)
+    # ---
+
     # --- Compute final scores (Using HPFR as requested) ---
     if not R:
-        return [], 0.0, 0.0, 0.0, prep_time, selection_time, len(CL)
+        # --- MODIFIED RETURN (8 values) ---
+        return [], 0.0, 0.0, 0.0, prep_time, selection_time, len(CL), cell_stats
         
-    # Calling HPFR, using optimal scores as in your template
     score, sum_psS, sum_psR = HPFR(R, optimal_psS, optimal_sS, W, K)
     
-    # --- CORRECTED RETURN ---
-    return R, score, sum_psS, sum_psR, prep_time, selection_time, len(CL)
+    # --- MODIFIED RETURN (8 values) ---
+    return R, score, sum_psS, sum_psR, prep_time, selection_time, len(CL), cell_stats

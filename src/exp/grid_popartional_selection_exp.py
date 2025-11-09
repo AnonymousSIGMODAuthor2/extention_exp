@@ -5,13 +5,11 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from collections import defaultdict
 from typing import List, Dict, Tuple
 import pandas as pd
-# --- MODIFIED IMPORT ---
-from models import Place, SquareGrid # Now import SquareGrid
+import numpy as np  # <-- ADDED FOR CALCULATING AVERAGES
+from models import Place, SquareGrid 
 from config import COMBO, NUM_CELLS, GAMMAS, DATASET_NAMES
 
-# --- MODIFIED IMPORT ---
-from baseline_iadu import load_dataset, plot_selected
-from grid_iadu import grid_iadu
+from baseline_iadu import load_dataset, plot_selected, iadu
 from extension_sampling import grid_sampling 
 from biased_sampling import biased_sampling
 # ---
@@ -19,28 +17,26 @@ from biased_sampling import biased_sampling
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
-# --- NEW IMPORTS for PLOTTING ---
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 # ---
 
-# Updated experiment name for the focused run
-EXPERIMENT_NAME = "grid_VS_extension_VS_biased"
+EXPERIMENT_NAME = "base_VS_extension_VS_biased_AVG"
 SHAPES = DATASET_NAMES
+NUM_RUNS = 10 
 
 def run_experiment():
     """
-    Runs a simplified experiment comparing:
-    1. Grid IAdU (Main Paper)
-    2. Grid Sampling (Extension Paper, Option 3)
-    3. Biased Sampling (From hardcore_exp.py)
+    Runs a comparison:
+    1. Base IAdU (Main Paper) - Run 1 time (deterministic)
+    2. Grid Sampling (Extension) - Run 10 times (randomized) and average
+    3. Biased Sampling (Baseline) - Run 10 times (randomized) and average
     
-    Logs H(R), psS, psR, and lenCL to Excel.
-    Generates a new 'experiment_plots.pdf' with visual results *including grid lines*.
+    Logs average scores to Excel.
+    Plots one sample run with the average score in the title.
     """
     log = defaultdict(list)
 
-    # --- NEW: Initialize PDF file ---
     pdf_path = f"{EXPERIMENT_NAME}_plots.pdf"
     pdf_pages = PdfPages(pdf_path)
     # ---
@@ -48,35 +44,71 @@ def run_experiment():
     for (K, k) in COMBO:
         for g in GAMMAS:
             W = K / (g * k)
-            print(f"Comparing Grid_IAdU vs. Grid_Sampling vs. Biased_Sampling | K={K}, k={k}, Gs={NUM_CELLS}")
+            print(f"Comparing Base_IAdU vs. Grid_Sampling (Avg) vs. Biased_Sampling (Avg) | K={K}, k={k}, Gs={NUM_CELLS}")
 
             for shape in SHAPES:
-                for G in NUM_CELLS:
-                    print(f"  Shape={shape}, G={G}")
-                    
-                    S: List[Place] = load_dataset(shape, K)
-                    
-                    if not S:
-                        print(f"    Skipping shape {shape} for K={K}, no data loaded.")
-                        continue
+                print(f"  Shape={shape}")
+                S: List[Place] = load_dataset(shape, K)
+                
+                if not S:
+                    print(f"    Skipping shape {shape} for K={K}, no data loaded.")
+                    continue
 
-                    # --- NEW: Create the grid object ---
-                    # This is the same grid that grid_iadu and grid_sampling will use
+                # --- 1. RUN BASE IADU (DETERMINISTIC) ---
+                print(f"    Running Base_IAdU (1 run)...")
+                R_base, score_base, base_pss_sum, base_psr_sum, _, _ = iadu(S, k, W)
+                
+                # --- 2. RUN BIASED SAMPLING (RANDOMIZED) ---
+                print(f"    Running Biased_Sampling ({NUM_RUNS} runs)...")
+                biased_scores, biased_pss_sums, biased_psr_sums = [], [], []
+                R_biased_last_run = [] 
+                
+                for _ in range(NUM_RUNS):
+                    R_run, score_run, pss_run, psr_run, _ = biased_sampling(S, k, W)
+                    biased_scores.append(score_run)
+                    biased_pss_sums.append(pss_run)
+                    biased_psr_sums.append(psr_run)
+                    R_biased_last_run = R_run 
+                
+                score_biased = np.mean(biased_scores)
+                biased_pss_sum = np.mean(biased_pss_sums)
+                biased_psr_sum = np.mean(biased_psr_sums)
+                R_biased = R_biased_last_run 
+                # ---
+
+                for G in NUM_CELLS:
+                    print(f"      Running Grid_Sampling for G={G} ({NUM_RUNS} runs)...")
+                    
                     try:
                         grid = SquareGrid(S, G)
                     except ValueError:
-                        print(f"    Skipping shape {shape}, K={K}. Invalid data for grid.")
+                        print(f"        Skipping G={G}. Invalid data for grid.")
                         continue
+                    
+                    lenCL = len(grid.get_full_cells())
+
+                    # --- 3. RUN GRID SAMPLING (RANDOMIZED) ---
+                    grid_scores, grid_pss_sums, grid_psr_sums = [], [], []
+                    R_grid_samp_last_run = [] 
+                    # --- NEW: Capture cell_stats from last run ---
+                    cell_stats_last_run = {}
+                    
+                    for _ in range(NUM_RUNS):
+                        # --- MODIFIED: Unpack 8 values ---
+                        R_run, score_run, pss_run, psr_run, _, _, _, cell_stats_run = grid_sampling(S, k, W, G)
+                        grid_scores.append(score_run)
+                        grid_pss_sums.append(pss_run)
+                        grid_psr_sums.append(psr_run)
+                        R_grid_samp_last_run = R_run
+                        # --- NEW: Save cell_stats from last run ---
+                        cell_stats_last_run = cell_stats_run
+                    
+                    score_grid_samp = np.mean(grid_scores)
+                    grid_samp_pss_sum = np.mean(grid_pss_sums)
+                    grid_samp_psr_sum = np.mean(grid_psr_sums)
+                    R_grid_samp = R_grid_samp_last_run
                     # ---
 
-                    # --- 1. Run Grid IAdU (Main Paper) ---
-                    R_grid, score_grid, grid_pss_sum, grid_psr_sum, _, _, lenCL = grid_iadu(S, k, W, G)
-
-                    # --- 2. Run Grid Sampling (Extension) ---
-                    R_grid_samp, score_grid_samp, grid_samp_pss_sum, grid_samp_psr_sum, _, _, _ = grid_sampling(S, k, W, G)
-
-                    # --- 3. Run Biased Sampling (FIXED UNPACK) ---
-                    R_biased, score_biased, biased_pss_sum, biased_psr_sum, _ = biased_sampling(S, k, W)
 
                     # --- 4. Log all comparison data ---
                     log_entry = {
@@ -88,42 +120,41 @@ def run_experiment():
                         "lenCL": lenCL, 
                         "K/(k*g)": f"K/(k * {g})",
 
-                        # Grid IAdU Results
-                        "grid_iadu_hpfr": score_grid,
-                        "grid_iadu_pss_sum": grid_pss_sum,
-                        "grid_iadu_psr_sum": grid_psr_sum,
+                        "base_iadu_hpfr": score_base,
+                        "base_iadu_pss_sum": base_pss_sum,
+                        "base_iadu_psr_sum": base_psr_sum,
                         
-                        # Grid Sampling Results
                         "grid_sampling_hpfr": score_grid_samp,
                         "grid_sampling_pss_sum": grid_samp_pss_sum,
                         "grid_sampling_psr_sum": grid_samp_psr_sum,
 
-                        # Biased Sampling Results
                         "biased_hpfr": score_biased,
                         "biased_pss_sum": biased_pss_sum,
                         "biased_psr_sum": biased_psr_sum,
                     }
                     log[(K, k, g, G)].append(log_entry)
 
-                    # --- UPDATED: Plotting logic ---
+                    # --- Plotting ---
                     fig, axes = plt.subplots(1, 3, figsize=(21, 7))
                     
                     fig.suptitle(f"Shape: {shape}  |  K={K}, k={k}  |  G={G} (Ax={grid.Ax}, Ay={grid.Ay})  |  lenCL={lenCL}", fontsize=16)
                     
-                    # Plot 1: Grid IAdU (now passing grid=grid)
-                    plot_selected(S, R_grid, f"Grid IAdU\nHPFR: {score_grid: .4f}", axes[0], grid=grid)
+                    # Plot 1: Base IAdU (No cell_stats)
+                    plot_selected(S, R_base, f"Base IAdU\nHPFR: {score_base: .4f}", axes[0], grid=grid)
                     
-                    # Plot 2: Grid Sampling (now passing grid=grid)
-                    plot_selected(S, R_grid_samp, f"Grid Sampling (Extension)\nHPFR: {score_grid_samp: .4f}", axes[1], grid=grid)
+                    # Plot 2: Grid Sampling (--- MODIFIED: Pass cell_stats ---)
+                    title_grid = f"Grid Sampling (Avg of {NUM_RUNS})\nHPFR: {score_grid_samp: .4f}"
+                    plot_selected(S, R_grid_samp, title_grid, axes[1], grid=grid, cell_stats=cell_stats_last_run)
                     
-                    # Plot 3: Biased Sampling (now passing grid=grid)
-                    plot_selected(S, R_biased, f"Biased Sampling\nHPFR: {score_biased: .4f}", axes[2], grid=grid)
+                    # Plot 3: Biased Sampling (No cell_stats)
+                    title_biased = f"Biased Sampling (Avg of {NUM_RUNS})\nHPFR: {score_biased: .4f}"
+                    plot_selected(S, R_biased, title_biased, axes[2], grid=grid)
                     
                     pdf_pages.savefig(fig)
                     plt.close(fig) 
-                    # --- End of updated plotting logic ---
+                    # --- End of plotting logic ---
 
-    # --- NEW: Close the PDF file after the loop ---
+    # --- Close the PDF file after the loop ---
     pdf_pages.close()
     print(f"\nSuccessfully saved plots to {pdf_path}")
     # ---
@@ -139,6 +170,8 @@ def save_outputs(log: Dict):
     def smart_round(value):
         if value is None:
             return None
+        if np.isnan(value):
+            return None
         if value == 0:
             return 0.0
         elif abs(value) >= 0.01:
@@ -149,9 +182,9 @@ def save_outputs(log: Dict):
     all_rows = []
     for row in log.values():
         for k, v in list(row.items()):
-            if isinstance(v, float):
+            if isinstance(v, (float, np.floating)):
                 row[k] = smart_round(v)
-            if k == "lenCL" and isinstance(v, float):
+            if k == "lenCL" and isinstance(v, (float, np.floating)):
                  row[k] = round(v, 1)
         all_rows.append(row)
 
@@ -167,9 +200,9 @@ def save_outputs(log: Dict):
     setup_cols = ["K", "k", "W", "K/(k*g)", "G", "lenCL"]
     
     score_cols = [
-        "grid_iadu_hpfr",
-        "grid_iadu_pss_sum",
-        "grid_iadu_psr_sum",
+        "base_iadu_hpfr",
+        "base_iadu_pss_sum",
+        "base_iadu_psr_sum",
         
         "grid_sampling_hpfr",
         "grid_sampling_pss_sum",
@@ -266,9 +299,9 @@ def compute_average_log(
             if fname in {"shape", "K", "k", "g", "G", "W", "K/(k*g)"}:
                 continue
             
-            vals = [r[fname] for r in rows if isinstance(r.get(fname), (int, float))]
+            vals = [r[fname] for r in rows if isinstance(r.get(fname), (int, float, np.floating))]
             if vals:
-                out[fname] = sum(vals) / len(vals)
+                out[fname] = np.mean(vals) # Use np.mean for safety
             elif fname not in out:
                 out[fname] = None 
 
