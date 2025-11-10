@@ -5,46 +5,42 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from collections import defaultdict
 from typing import List, Dict, Tuple
 import pandas as pd
-import numpy as np  # <-- ADDED FOR CALCULATING AVERAGES
 from models import Place, SquareGrid 
 from config import COMBO, NUM_CELLS, GAMMAS, DATASET_NAMES
 
 from baseline_iadu import load_dataset, plot_selected, iadu
 from extension_sampling import grid_sampling 
 from biased_sampling import biased_sampling
-# ---
 
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
-# ---
 
-EXPERIMENT_NAME = "base_VS_extension_VS_biased_AVG"
+# Using the name you requested
+EXPERIMENT_NAME = "base_VS_extension_VS_biased"
 SHAPES = DATASET_NAMES
-NUM_RUNS = 10 
 
 def run_experiment():
     """
-    Runs a comparison:
-    1. Base IAdU (Main Paper) - Run 1 time (deterministic)
-    2. Grid Sampling (Extension) - Run 10 times (randomized) and average
-    3. Biased Sampling (Baseline) - Run 10 times (randomized) and average
+    Runs a simple comparison:
+    1. Base IAdU (Main Paper) - Run 1 time
+    2. Grid Sampling (Extension) - Run 1 time
+    3. Biased Sampling (Baseline) - Run 1 time
     
-    Logs average scores to Excel.
-    Plots one sample run with the average score in the title.
+    Logs scores AND times to Excel.
+    Plots one sample run.
     """
     log = defaultdict(list)
 
     pdf_path = f"{EXPERIMENT_NAME}_plots.pdf"
     pdf_pages = PdfPages(pdf_path)
-    # ---
 
     for (K, k) in COMBO:
         for g in GAMMAS:
             W = K / (g * k)
-            print(f"Comparing Base_IAdU vs. Grid_Sampling (Avg) vs. Biased_Sampling (Avg) | K={K}, k={k}, Gs={NUM_CELLS}")
+            print(f"Comparing Base_IAdU vs. Grid_Sampling vs. Biased_Sampling | K={K}, k={k}, Gs={NUM_CELLS}")
 
             for shape in SHAPES:
                 print(f"  Shape={shape}")
@@ -54,30 +50,18 @@ def run_experiment():
                     print(f"    Skipping shape {shape} for K={K}, no data loaded.")
                     continue
 
-                # --- 1. RUN BASE IADU (DETERMINISTIC) ---
-                print(f"    Running Base_IAdU (1 run)...")
-                R_base, score_base, base_pss_sum, base_psr_sum, _, _ = iadu(S, k, W)
+                # --- 1. Run Base IAdU (IADU) ---
+                # API: 3 args (S, k, W), 6 return values
+                print(f"    Running Base_IAdU...")
+                R_base, score_base, base_pss_sum, base_psr_sum, prep_time_base, selection_time_base = iadu(S, k, W)
                 
-                # --- 2. RUN BIASED SAMPLING (RANDOMIZED) ---
-                print(f"    Running Biased_Sampling ({NUM_RUNS} runs)...")
-                biased_scores, biased_pss_sums, biased_psr_sums = [], [], []
-                R_biased_last_run = [] 
-                
-                for _ in range(NUM_RUNS):
-                    R_run, score_run, pss_run, psr_run, _ = biased_sampling(S, k, W)
-                    biased_scores.append(score_run)
-                    biased_pss_sums.append(pss_run)
-                    biased_psr_sums.append(psr_run)
-                    R_biased_last_run = R_run 
-                
-                score_biased = np.mean(biased_scores)
-                biased_pss_sum = np.mean(biased_pss_sums)
-                biased_psr_sum = np.mean(biased_psr_sums)
-                R_biased = R_biased_last_run 
-                # ---
+                # --- 2. Run Biased Sampling (Baseline) ---
+                # API: 3 args (S, k, W), 5 return values
+                print(f"    Running Biased_Sampling...")
+                R_biased, score_biased, biased_pss_sum, biased_psr_sum, selection_time_biased = biased_sampling(S, k, W)
 
                 for G in NUM_CELLS:
-                    print(f"      Running Grid_Sampling for G={G} ({NUM_RUNS} runs)...")
+                    print(f"      Running Grid_Sampling for G={G}...")
                     
                     try:
                         grid = SquareGrid(S, G)
@@ -87,30 +71,11 @@ def run_experiment():
                     
                     lenCL = len(grid.get_full_cells())
 
-                    # --- 3. RUN GRID SAMPLING (RANDOMIZED) ---
-                    grid_scores, grid_pss_sums, grid_psr_sums = [], [], []
-                    R_grid_samp_last_run = [] 
-                    # --- NEW: Capture cell_stats from last run ---
-                    cell_stats_last_run = {}
-                    
-                    for _ in range(NUM_RUNS):
-                        # --- MODIFIED: Unpack 8 values ---
-                        R_run, score_run, pss_run, psr_run, _, _, _, cell_stats_run = grid_sampling(S, k, W, G)
-                        grid_scores.append(score_run)
-                        grid_pss_sums.append(pss_run)
-                        grid_psr_sums.append(psr_run)
-                        R_grid_samp_last_run = R_run
-                        # --- NEW: Save cell_stats from last run ---
-                        cell_stats_last_run = cell_stats_run
-                    
-                    score_grid_samp = np.mean(grid_scores)
-                    grid_samp_pss_sum = np.mean(grid_pss_sums)
-                    grid_samp_psr_sum = np.mean(grid_psr_sums)
-                    R_grid_samp = R_grid_samp_last_run
-                    # ---
+                    # --- 3. Run Grid Sampling (Extension) ---
+                    # API: 4 args (S, k, W, G), 8 return values
+                    R_grid_samp, score_grid_samp, grid_samp_pss_sum, grid_samp_psr_sum, prep_time_grid, selection_time_grid, _, cell_stats_run = grid_sampling(S, k, W, G)
 
-
-                    # --- 4. Log all comparison data ---
+                    # --- LOGGING (using meaningful names) ---
                     log_entry = {
                         "shape": shape,
                         "K": K,
@@ -131,46 +96,51 @@ def run_experiment():
                         "biased_hpfr": score_biased,
                         "biased_pss_sum": biased_pss_sum,
                         "biased_psr_sum": biased_psr_sum,
+                        
+                        # Using your requested names
+                        "baseline_prep_time": prep_time_base,
+                        "gridsampling_prep_time": prep_time_grid,
+                        "biasedsampling_prep_time": 0.0, # Biased sampling has no prep time
+                        
+                        "baseline_sel_time": selection_time_base,
+                        "gridsampling_sel_time": selection_time_grid,
+                        "biasedsampling_sel_time": selection_time_biased,
+                        
+                        "baseline_x_time": prep_time_base + selection_time_base,
+                        "gridsampling_x_time": prep_time_grid + selection_time_grid,
+                        "biasedsampling_x_time": selection_time_biased, # Total time is just selection time
                     }
                     log[(K, k, g, G)].append(log_entry)
 
                     # --- Plotting ---
                     fig, axes = plt.subplots(1, 3, figsize=(21, 7))
-                    
                     fig.suptitle(f"Shape: {shape}  |  K={K}, k={k}  |  G={G} (Ax={grid.Ax}, Ay={grid.Ay})  |  lenCL={lenCL}", fontsize=16)
                     
-                    # Plot 1: Base IAdU (No cell_stats)
                     plot_selected(S, R_base, f"Base IAdU\nHPFR: {score_base: .4f}", axes[0], grid=grid)
                     
-                    # Plot 2: Grid Sampling (--- MODIFIED: Pass cell_stats ---)
-                    title_grid = f"Grid Sampling (Avg of {NUM_RUNS})\nHPFR: {score_grid_samp: .4f}"
-                    plot_selected(S, R_grid_samp, title_grid, axes[1], grid=grid, cell_stats=cell_stats_last_run)
+                    title_grid = f"Grid Sampling (Extension)\nHPFR: {score_grid_samp: .4f}"
+                    plot_selected(S, R_grid_samp, title_grid, axes[1], grid=grid, cell_stats=cell_stats_run)
                     
-                    # Plot 3: Biased Sampling (No cell_stats)
-                    title_biased = f"Biased Sampling (Avg of {NUM_RUNS})\nHPFR: {score_biased: .4f}"
+                    title_biased = f"Biased Sampling\nHPFR: {score_biased: .4f}"
                     plot_selected(S, R_biased, title_biased, axes[2], grid=grid)
                     
                     pdf_pages.savefig(fig)
                     plt.close(fig) 
-                    # --- End of plotting logic ---
 
-    # --- Close the PDF file after the loop ---
     pdf_pages.close()
     print(f"\nSuccessfully saved plots to {pdf_path}")
-    # ---
 
     avg_log = compute_average_log(log)
-    save_outputs(avg_log)
+    save_outputs(log=avg_log, xlsx_name=f"{EXPERIMENT_NAME}.xlsx")
 
     
-def save_outputs(log: Dict):
+def save_outputs(log: Dict, xlsx_name: str):
     """
     Saves a simplified Excel file with the direct comparison.
+    (Updated to use your requested column names)
     """
     def smart_round(value):
         if value is None:
-            return None
-        if np.isnan(value):
             return None
         if value == 0:
             return 0.0
@@ -182,9 +152,9 @@ def save_outputs(log: Dict):
     all_rows = []
     for row in log.values():
         for k, v in list(row.items()):
-            if isinstance(v, (float, np.floating)):
+            if isinstance(v, float):
                 row[k] = smart_round(v)
-            if k == "lenCL" and isinstance(v, (float, np.floating)):
+            if k == "lenCL" and isinstance(v, float):
                  row[k] = round(v, 1)
         all_rows.append(row)
 
@@ -213,17 +183,34 @@ def save_outputs(log: Dict):
         "biased_psr_sum",
     ]
     
-    all_cols = setup_cols + score_cols
+    # Using your requested names
+    prep_cols = [
+        "baseline_prep_time",
+        "gridsampling_prep_time",
+        "biasedsampling_prep_time",
+    ]
+    
+    select_cols = [
+        "baseline_sel_time",
+        "gridsampling_sel_time",
+        "biasedsampling_sel_time",
+    ]
+    
+    total_cols = [
+        "baseline_x_time",
+        "gridsampling_x_time",
+        "biasedsampling_x_time",
+    ]
+    
+    all_cols = setup_cols + score_cols + prep_cols + select_cols + total_cols
 
     for col in all_cols:
         if col not in df.columns:
             df[col] = None
     df = df[all_cols]
 
-    xlsx_name = f"{EXPERIMENT_NAME}.xlsx"
     df.to_excel(xlsx_name, index=False)
 
-    # === Styling ===
     wb = load_workbook(xlsx_name)
     ws = wb.active
     header_fill = PatternFill(start_color="A6A6A6", end_color="A6A6A6", fill_type="solid")
@@ -240,6 +227,9 @@ def save_outputs(log: Dict):
     group_fills = {
         "setup": PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid"),
         "score": PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid"),
+        "prep": PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid"),
+        "select": PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid"),
+        "total": PatternFill(start_color="EDEDED", end_color="EDEDED", fill_type="solid"),
     }
 
     def apply_group_style(cols, fill, border_after=False):
@@ -258,9 +248,11 @@ def save_outputs(log: Dict):
                         cell.border = thin_border
 
     apply_group_style(setup_cols, group_fills["setup"], border_after=True)
-    apply_group_style(score_cols, group_fills["score"], border_after=False)
+    apply_group_style(score_cols, group_fills["score"], border_after=True)
+    apply_group_style(prep_cols, group_fills["prep"], border_after=True)
+    apply_group_style(select_cols, group_fills["select"], border_after=True)
+    apply_group_style(total_cols, group_fills["total"], border_after=False)
 
-    # autosize
     from openpyxl.utils import get_column_letter
     for col in ws.columns:
         max_len = 0
@@ -285,7 +277,6 @@ def compute_average_log(
         if not rows:
             continue
         
-        # Setup the output dictionary with non-numeric fields
         out = {
             "K": key[0],
             "k": key[1],
@@ -299,9 +290,9 @@ def compute_average_log(
             if fname in {"shape", "K", "k", "g", "G", "W", "K/(k*g)"}:
                 continue
             
-            vals = [r[fname] for r in rows if isinstance(r.get(fname), (int, float, np.floating))]
+            vals = [r[fname] for r in rows if isinstance(r.get(fname), (int, float))]
             if vals:
-                out[fname] = np.mean(vals) # Use np.mean for safety
+                out[fname] = sum(vals) / len(vals)
             elif fname not in out:
                 out[fname] = None 
 
